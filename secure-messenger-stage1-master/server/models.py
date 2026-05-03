@@ -48,7 +48,6 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
-from database import Base
 
 
 DATABASE_URL = "sqlite:///./messenger.db"
@@ -83,13 +82,6 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     username: Mapped[str] = mapped_column(
-        String,
-        unique=True,
-        index=True,
-        nullable=False
-    )
-
-    email: Mapped[str] = mapped_column(
         String,
         unique=True,
         index=True,
