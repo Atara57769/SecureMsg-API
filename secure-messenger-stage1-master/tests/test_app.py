@@ -153,16 +153,27 @@ class TestEncryption:
     # but that decrypt(ciphertext) DOES return the original plain text.
     def test_messages_are_stored_encrypted(self, client):
         from server.models import Message
-        token = register_and_login(client)
+        token = register_and_login(client, "alice", "secret123")
+        register_and_login(client, "bob", "secret456")
+        
         # send a message
-        # ... your code here ...
+        client.post(
+            "/messages",
+            json={"content": "my secret message", "recipient": "bob"},
+            headers=auth(token)
+        )
+        
         # query the DB directly
         db = TestingSession()
         row = db.query(Message).first()
+        ciphertext = row.ciphertext
         db.close()
+        
         # assert the ciphertext is not plain text
+        assert ciphertext != "my secret message"
+        
         # assert decrypt(ciphertext) returns the original
-        pass
+        assert decrypt(ciphertext) == "my secret message"
 
 
 # ===========================================================================
@@ -205,9 +216,22 @@ class TestMessaging:
     def test_user_sees_only_their_messages(self, client):
         alice_token = register_and_login(client, "alice", "secret123")
         bob_token   = register_and_login(client, "bob",   "secret456")
-        register_and_login(client, "charlie", "secret789")
+        charlie_token = register_and_login(client, "charlie", "secret789")
 
         # alice → bob
+        client.post("/messages", json={"content": "hello bob", "recipient": "bob"}, headers=auth(alice_token))
+        
         # charlie → bob  (alice should NOT see this)
-        # ... your code here ...
-        pass
+        client.post("/messages", json={"content": "hi bob from charlie", "recipient": "bob"}, headers=auth(charlie_token))
+        
+        # verify alice sees only her messages
+        alice_response = client.get("/messages", headers=auth(alice_token))
+        alice_messages = alice_response.json()
+        assert len(alice_messages) == 1
+        assert alice_messages[0]["content"] == "hello bob"
+        assert alice_messages[0]["recipient"] == "bob"
+
+        # verify bob sees all messages to him
+        bob_response = client.get("/messages", headers=auth(bob_token))
+        bob_messages = bob_response.json()
+        assert len(bob_messages) == 2
