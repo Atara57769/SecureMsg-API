@@ -93,8 +93,7 @@ def hash_password(plain: str) -> str:
     Return a bcrypt hash of the password.
     This is what gets stored in the database — never the plain text.
     """
-    # your code here
-    pass
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
 
 # ---------------------------------------------------------------------------
