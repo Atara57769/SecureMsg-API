@@ -41,6 +41,14 @@ from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, String, Text, DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from datetime import datetime, timezone
+from sqlalchemy import String, DateTime
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
+from datetime import datetime
+
+from database import Base
 
 
 DATABASE_URL = "sqlite:///./messenger.db"
@@ -72,18 +80,52 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
 
-    # your columns here
+    id: Mapped[int] = mapped_column(primary_key=True)
 
+    username: Mapped[str] = mapped_column(
+        String,
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    email: Mapped[str] = mapped_column(
+        String,
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    password_hash: Mapped[str] = mapped_column(
+        String,
+        nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc)
+    )
 
 # ---------------------------------------------------------------------------
 # TODO 2 — Define the Message table
 # ---------------------------------------------------------------------------
+
+
 class Message(Base):
     __tablename__ = "messages"
 
-    # your columns here
-
-
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    
+    sender: Mapped[str] = mapped_column(String, nullable=False)
+    
+    recipient: Mapped[str] = mapped_column(String, nullable=False)
+    
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, 
+        default=lambda: datetime.now(timezone.utc)
+    )
 def create_tables():
     """Creates all tables in the database if they don't exist yet."""
     Base.metadata.create_all(bind=engine)
