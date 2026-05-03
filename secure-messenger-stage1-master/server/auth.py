@@ -116,8 +116,9 @@ def create_token(username: str) -> str:
     then sign and return it as a string.
     Hint: use TOKEN_EXPIRE_HOURS and datetime.now(timezone.utc).
     """
-    # your code here
-    pass
+    expire = datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRE_HOURS)
+    payload = {"sub": username, "exp": expire}
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +129,11 @@ def decode_token(token: str) -> Optional[str]:
     Decode the token and return the username ("sub" field).
     Return None if the token is invalid or expired — do not raise.
     """
-    # your code here
-    pass
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except JWTError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -144,5 +148,12 @@ def require_auth(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -
     Usage in a route:
         def my_route(username: str = Depends(require_auth)):
     """
-    # your code here
-    pass
+    token = credentials.credentials
+    username = decode_token(token)
+    if username is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return username
