@@ -104,8 +104,7 @@ def verify_password(plain: str, hashed: str) -> bool:
     Return True if the plain password matches the stored hash.
     Used at login time.
     """
-    # your code here
-    pass
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
 # ---------------------------------------------------------------------------
