@@ -5,26 +5,19 @@ client.py — Interactive CLI client for the Secure Messenger.
 USAGE
   python client.py [--url http://localhost:8000]
 
-WHAT IT DOES
-  1. Prompts for your username and password, then registers OR logs in
-     (it tries login first; if that fails it offers to register).
-  2. Fetches the message history and prints it.
-  3. Opens a persistent SSE connection to GET /stream so you see new
-     messages the moment they arrive — no polling required.
-  4. Reads lines from stdin so you can type  recipient: message  to send.
+FLOW
+  1. Enter username + password  (register on first run)
+  2. Choose who to chat with
+  3. Just type your message and hit Enter  — no "recipient:" prefix needed
+  4. Commands:
+       /to <name>   — switch conversation partner
+       /list        — print message history
+       /quit        — exit
 
 RUNNING TWO CLIENTS SIDE-BY-SIDE
-  Terminal A:  python client.py          (log in as alice)
-  Terminal B:  python client.py          (log in as bob)
-  Type in A, see it appear instantly in B. That's Server-Sent Events.
-
-DEPENDENCIES
-  All dependencies are already in requirements.txt:
-    httpx==0.27.0     (async HTTP client)
-  No extra packages needed.
-
-KEYBOARD SHORTCUTS
-  Ctrl-C   quit
+  Terminal A:  python client.py   (log in as alice, chat with bob)
+  Terminal B:  python client.py   (log in as bob,   chat with alice)
+  Type in A → message appears instantly in B.
 """
 
 import asyncio
@@ -35,26 +28,37 @@ from datetime import datetime, timezone
 import httpx
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Colour / terminal helpers
+# Terminal colours
 # ─────────────────────────────────────────────────────────────────────────────
-
-RESET  = "\033[0m"
-BOLD   = "\033[1m"
-DIM    = "\033[2m"
-RED    = "\033[91m"
-GREEN  = "\033[92m"
-YELLOW = "\033[93m"
-CYAN   = "\033[96m"
+RESET   = "\033[0m"
+BOLD    = "\033[1m"
+DIM     = "\033[2m"
+RED     = "\033[91m"
+GREEN   = "\033[92m"
+YELLOW  = "\033[93m"
+CYAN    = "\033[96m"
 MAGENTA = "\033[95m"
-WHITE  = "\033[97m"
+WHITE   = "\033[97m"
+BLUE    = "\033[94m"
 
 
-def _col(code: str, text: str) -> str:
+def _c(code: str, text: str) -> str:
     return f"{code}{text}{RESET}"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Display helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _banner() -> None:
+    print(_c(CYAN, """
+  ╔══════════════════════════════════════════╗
+  ║   🔐  Secure Messenger  —  CLI Client   ║
+  ╚══════════════════════════════════════════╝
+"""))
+
+
 def _ts(iso: str) -> str:
-    """Convert ISO-8601 timestamp to a short HH:MM display."""
     try:
         dt = datetime.fromisoformat(iso)
         if dt.tzinfo is None:
@@ -64,201 +68,262 @@ def _ts(iso: str) -> str:
         return "??:??"
 
 
-def _banner() -> None:
-    print(_col(CYAN, r"""
-  ╔══════════════════════════════════════════╗
-  ║   🔐  Secure Messenger  —  CLI Client   ║
-  ╚══════════════════════════════════════════╝
-"""))
+def _print_message(sender: str, recipient: str, content: str,
+                   created_at: str, me: str) -> None:
+    ts   = _ts(created_at)
+    mine = sender == me
+    colour = YELLOW if mine else MAGENTA
+    arrow  = _c(DIM, "→")
+    header = (f"  {_c(colour, sender)} {arrow} {_c(DIM, recipient)}  "
+              f"{_c(DIM, ts)}")
+    body   = f"    {_c(WHITE, content)}"
+    print(f"\r{header}\n{body}")   # \r clears any partial input line
+
+
+def _info(msg: str)  -> None: print(_c(DIM,   f"  ℹ  {msg}"))
+def _ok(msg: str)    -> None: print(_c(GREEN,  f"  ✔  {msg}"))
+def _err(msg: str)   -> None: print(_c(RED,    f"  ✖  {msg}"))
+def _warn(msg: str)  -> None: print(_c(YELLOW, f"  ⚠  {msg}"))
 
 
 def _prompt(label: str) -> str:
-    sys.stdout.write(_col(BOLD, f"  {label}: "))
+    sys.stdout.write(_c(BOLD, f"  {label}: "))
     sys.stdout.flush()
     return sys.stdin.readline().rstrip("\n")
 
 
-def _info(msg: str) -> None:
-    print(_col(DIM, f"  ℹ  {msg}"))
-
-
-def _ok(msg: str) -> None:
-    print(_col(GREEN, f"  ✔  {msg}"))
-
-
-def _err(msg: str) -> None:
-    print(_col(RED, f"  ✖  {msg}"))
-
-
-def _print_message(sender: str, recipient: str, content: str,
-                   created_at: str, me: str) -> None:
-    ts = _ts(created_at)
-    if sender == me:
-        header = _col(YELLOW, f"  [{ts}] {sender}") + _col(DIM, f"  →  {recipient}")
-        body   = _col(WHITE, f"       {content}")
-    else:
-        header = _col(MAGENTA, f"  [{ts}] {sender}") + _col(DIM, f"  →  {recipient}")
-        body   = _col(WHITE, f"       {content}")
-    print(header)
-    print(body)
+def _show_help(current_recipient: str) -> None:
+    print()
+    print(_c(CYAN,  "  ┌─ Commands ────────────────────────────────────────────┐"))
+    print(_c(CYAN,  "  │") + f"  Just type a message → sent to "
+          + _c(BOLD, current_recipient))
+    print(_c(CYAN,  "  │") + "  " + _c(BOLD, "/to <name>")
+          + "   — switch conversation partner")
+    print(_c(CYAN,  "  │") + "  " + _c(BOLD, "/list")
+          + "        — show full message history")
+    print(_c(CYAN,  "  │") + "  " + _c(BOLD, "/help")
+          + "        — show this help")
+    print(_c(CYAN,  "  │") + "  " + _c(BOLD, "/quit")
+          + "        — exit")
+    print(_c(CYAN,  "  └───────────────────────────────────────────────────────┘"))
+    print()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Auth helpers
+# Auth
 # ─────────────────────────────────────────────────────────────────────────────
+
+# All network-related exceptions we want to catch and show cleanly
+_NETWORK_ERRORS = (
+    httpx.ReadTimeout,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.RemoteProtocolError,
+    httpx.HTTPStatusError,
+)
+
 
 async def _login(client: httpx.AsyncClient, base: str,
                  username: str, password: str) -> str | None:
-    """Return a JWT token string, or None on failure."""
-    r = await client.post(f"{base}/login",
-                          json={"username": username, "password": password})
-    if r.status_code == 200:
-        return r.json()["access_token"]
-    return None
+    """Return a JWT token on success, or None on wrong credentials / network error."""
+    try:
+        r = await client.post(f"{base}/login",
+                              json={"username": username, "password": password})
+        return r.json()["access_token"] if r.status_code == 200 else None
+    except _NETWORK_ERRORS as exc:
+        _err(f"Cannot reach server: {exc.__class__.__name__} — is the server running?")
+        sys.exit(1)
 
 
 async def _register(client: httpx.AsyncClient, base: str,
-                    username: str, password: str) -> bool:
-    r = await client.post(f"{base}/register",
-                          json={"username": username, "password": password})
-    return r.status_code == 201
+                    username: str, password: str) -> str | None:
+    """Return None on success, or an error string on failure."""
+    try:
+        r = await client.post(f"{base}/register",
+                              json={"username": username, "password": password})
+    except _NETWORK_ERRORS as exc:
+        _err(f"Cannot reach server: {exc.__class__.__name__} — is the server running?")
+        sys.exit(1)
+    if r.status_code == 201:
+        return None
+    # Extract a human-readable reason from the server response
+    try:
+        body = r.json()
+        if "detail" in body:
+            detail = body["detail"]
+            # Pydantic validation errors come as a list
+            if isinstance(detail, list):
+                msgs = []
+                for err in detail:
+                    loc  = " → ".join(str(x) for x in err.get("loc", []) if x != "body")
+                    msg  = err.get("msg", "invalid")
+                    msgs.append(f"{loc}: {msg}" if loc else msg)
+                return "; ".join(msgs)
+            return str(detail)
+    except Exception:
+        pass
+    return f"Server returned {r.status_code}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Fetch history
+# Message history
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _fetch_history(client: httpx.AsyncClient, base: str,
-                         token: str, me: str) -> None:
+                         token: str, me: str,
+                         filter_username: str | None = None) -> None:
     r = await client.get(f"{base}/messages",
                          headers={"Authorization": f"Bearer {token}"})
     if r.status_code != 200:
         _err(f"Could not fetch message history: {r.status_code}")
         return
     messages = r.json()
+
+    if filter_username:
+        messages = [m for m in messages
+                    if m["sender"] == filter_username
+                    or m["recipient"] == filter_username]
+
     if not messages:
         _info("No messages yet.")
         return
-    _info(f"─── Message history ({len(messages)}) ───────────────────")
+
+    label = f"with {filter_username}" if filter_username else "all"
+    _info(f"─── History ({label}, {len(messages)} messages) ─────────────")
     for msg in messages:
         _print_message(msg["sender"], msg["recipient"],
                        msg["content"], msg["created_at"], me)
-    _info("─── End of history ─────────────────────────────")
+    _info("─── End of history ──────────────────────────────────────")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SSE listener (runs as a background asyncio task)
+# SSE listener — auto-reconnects on disconnect
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _listen_stream(base: str, token: str, me: str,
-                          stop_event: asyncio.Event) -> None:
-    """
-    Connect to GET /stream?token=<JWT> and print each incoming SSE event.
-
-    httpx streams the response body line-by-line via async iteration.
-    We manually parse the SSE wire format:
-      data: <json payload>\\n
-      \\n
-    """
+                          stop: asyncio.Event) -> None:
     url = f"{base}/stream?token={token}"
     _info("Connecting to live stream…")
 
-    async with httpx.AsyncClient(timeout=None) as stream_client:
+    while not stop.is_set():
         try:
-            async with stream_client.stream("GET", url) as resp:
-                if resp.status_code != 200:
-                    _err(f"Stream returned {resp.status_code}")
-                    stop_event.set()
-                    return
-                _ok("Connected — you will see new messages appear here instantly.\n")
-                buffer = ""
-                async for chunk in resp.aiter_text():
-                    if stop_event.is_set():
-                        break
-                    buffer += chunk
-                    # SSE events are delimited by double newlines
-                    while "\n\n" in buffer:
-                        event_str, buffer = buffer.split("\n\n", 1)
-                        for line in event_str.splitlines():
-                            if line.startswith("data:"):
-                                payload = line[len("data:"):].strip()
-                                try:
-                                    msg = json.loads(payload)
-                                    _print_message(
-                                        msg["sender"], msg["recipient"],
-                                        msg["content"], msg["created_at"], me,
-                                    )
-                                except json.JSONDecodeError:
-                                    pass   # ignore malformed events
-        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as exc:
-            if not stop_event.is_set():
-                _err(f"Stream disconnected: {exc}")
-        finally:
-            stop_event.set()
+            async with httpx.AsyncClient(timeout=None) as sc:
+                async with sc.stream("GET", url) as resp:
+                    if resp.status_code != 200:
+                        _err(f"Stream returned {resp.status_code} — retrying in 5 s…")
+                        await asyncio.sleep(5)
+                        continue
+
+                    _ok("Connected — new messages will appear here instantly.\n")
+                    buffer = ""
+                    async for chunk in resp.aiter_text():
+                        if stop.is_set():
+                            return
+                        buffer += chunk
+                        while "\n\n" in buffer:
+                            event_str, buffer = buffer.split("\n\n", 1)
+                            for line in event_str.splitlines():
+                                if line.startswith("data:"):
+                                    payload = line[len("data:"):].strip()
+                                    try:
+                                        msg = json.loads(payload)
+                                        _print_message(
+                                            msg["sender"], msg["recipient"],
+                                            msg["content"], msg["created_at"],
+                                            me,
+                                        )
+                                    except json.JSONDecodeError:
+                                        pass
+
+        except (httpx.RemoteProtocolError, httpx.ReadError,
+                httpx.ConnectError, httpx.TimeoutException) as exc:
+            if stop.is_set():
+                return
+            _warn(f"Stream lost ({exc.__class__.__name__}) — reconnecting in 3 s…")
+            await asyncio.sleep(3)
+
+    stop.set()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Input loop  (runs as a background asyncio task)
+# Shared mutable state for current recipient
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _State:
+    def __init__(self, recipient: str):
+        self.recipient = recipient
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Input loop
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _input_loop(base: str, token: str, me: str,
-                       stop_event: asyncio.Event) -> None:
-    """
-    Read lines from stdin and send them as messages.
-
-    Format:  recipient: message text
-    Example: bob: Hey, are you there?
-
-    Type  /quit  or press Ctrl-C to exit.
-    """
+                       state: _State, stop: asyncio.Event) -> None:
     loop = asyncio.get_running_loop()
 
-    print()
-    print(_col(CYAN, "  ┌─ How to send a message ─────────────────────────────────┐"))
-    print(_col(CYAN, "  │") + "  Type:  " + _col(BOLD, "recipient: your message") + "  then press Enter")
-    print(_col(CYAN, "  │") + "  Type:  " + _col(BOLD, "/quit") + "               to exit")
-    print(_col(CYAN, "  └─────────────────────────────────────────────────────────┘"))
+    _show_help(state.recipient)
+    _info(f"Currently chatting with: {_c(BOLD, state.recipient)}")
     print()
 
     async with httpx.AsyncClient() as send_client:
-        while not stop_event.is_set():
-            # Read one line without blocking the event loop
+        while not stop.is_set():
+            # Render a lightweight prompt showing current partner
+            sys.stdout.write(
+                _c(DIM, f"  [{me}→{state.recipient}] ") + _c(BOLD, "")
+            )
+            sys.stdout.flush()
+
             try:
                 raw = await loop.run_in_executor(None, sys.stdin.readline)
             except (EOFError, OSError):
                 break
 
             line = raw.strip()
-
             if not line:
                 continue
 
-            if line in ("/quit", "/exit", "/q"):
-                stop_event.set()
-                break
+            # ── Commands ────────────────────────────────────────────────────
+            if line.startswith("/"):
+                parts = line.split(maxsplit=1)
+                cmd   = parts[0].lower()
 
-            # Parse  recipient: message
-            if ":" not in line:
-                _err("Format: recipient: message   (e.g.  bob: hello)")
+                if cmd in ("/quit", "/exit", "/q"):
+                    stop.set()
+                    break
+
+                elif cmd == "/to":
+                    if len(parts) < 2 or not parts[1].strip():
+                        _err("Usage: /to <username>")
+                    else:
+                        new_partner = parts[1].strip()
+                        state.recipient = new_partner
+                        _ok(f"Switched — now chatting with {_c(BOLD, new_partner)}")
+                        _info(f"Fetching history with {new_partner}…")
+                        await _fetch_history(send_client, base, token,
+                                             me, filter_username=new_partner)
+                        print()
+
+                elif cmd == "/list":
+                    partner = parts[1].strip() if len(parts) > 1 else state.recipient
+                    await _fetch_history(send_client, base, token,
+                                         me, filter_username=partner)
+
+                elif cmd == "/help":
+                    _show_help(state.recipient)
+
+                else:
+                    _err(f"Unknown command '{cmd}'. Type /help for options.")
+
                 continue
 
-            recipient, _, content = line.partition(":")
-            recipient = recipient.strip()
-            content   = content.strip()
-
-            if not recipient or not content:
-                _err("Recipient and message cannot be empty.")
-                continue
-
+            # ── Send plain message to current recipient ──────────────────────
             r = await send_client.post(
                 f"{base}/messages",
-                json={"recipient": recipient, "content": content},
+                json={"recipient": state.recipient, "content": line},
                 headers={"Authorization": f"Bearer {token}"},
             )
-            if r.status_code == 201:
-                # The SSE stream will echo it back; no need to print here
-                pass
-            else:
+            if r.status_code != 201:
                 try:
                     detail = r.json().get("detail", r.text)
                 except Exception:
@@ -280,8 +345,9 @@ async def main() -> None:
 
     _banner()
 
-    # ── Authentication ──────────────────────────────────────────────────────
-    async with httpx.AsyncClient() as auth_client:
+    # ── Auth ────────────────────────────────────────────────────────────────
+    # 30 s timeout: bcrypt password hashing can take a few seconds server-side
+    async with httpx.AsyncClient(timeout=30.0) as auth_client:
         username = _prompt("Username")
         password = _prompt("Password")
 
@@ -291,27 +357,43 @@ async def main() -> None:
             answer = _prompt(
                 f"'{username}' not found or wrong password. Register? [y/N]"
             ).strip().lower()
-            if answer == "y":
-                ok = await _register(auth_client, base, username, password)
-                if not ok:
-                    _err("Registration failed (username may already exist).")
-                    sys.exit(1)
-                _ok(f"Registered as '{username}'.")
-                token = await _login(auth_client, base, username, password)
-                if token is None:
-                    _err("Login after registration failed — this should not happen.")
-                    sys.exit(1)
-            else:
+            if answer != "y":
                 _err("Login failed. Exiting.")
                 sys.exit(1)
 
-        _ok(f"Logged in as {_col(BOLD, username)}.")
+            # Re-prompt until registration succeeds
+            while True:
+                err = await _register(auth_client, base, username, password)
+                if err is None:
+                    break
+                _err(f"Registration failed: {err}")
+                _info("Please try again (username ≥ 3 chars, password ≥ 6 chars).")
+                username = _prompt("Username").strip()
+                password = _prompt("Password").strip()
 
-    # ── History ─────────────────────────────────────────────────────────────
+            _ok(f"Registered as '{username}'.")
+            token = await _login(auth_client, base, username, password)
+            if token is None:
+                _err("Login after registration failed.")
+                sys.exit(1)
+
+        _ok(f"Logged in as {_c(BOLD, username)}.")
+
+    # ── Choose conversation partner ──────────────────────────────────────────
+    print()
+    recipient = _prompt("Chat with (username)").strip()
+    while not recipient:
+        _err("Please enter a username.")
+        recipient = _prompt("Chat with (username)").strip()
+
+    state = _State(recipient)
+
+    # ── History for this conversation ────────────────────────────────────────
     async with httpx.AsyncClient() as hist_client:
-        await _fetch_history(hist_client, base, token, username)
+        await _fetch_history(hist_client, base, token, username,
+                             filter_username=recipient)
 
-    # ── Live chat ────────────────────────────────────────────────────────────
+    # ── Start live chat ──────────────────────────────────────────────────────
     stop = asyncio.Event()
 
     listener = asyncio.create_task(
@@ -319,16 +401,13 @@ async def main() -> None:
         name="sse-listener",
     )
     sender = asyncio.create_task(
-        _input_loop(base, token, username, stop),
+        _input_loop(base, token, username, state, stop),
         name="input-loop",
     )
 
-    # Wait until either task signals we should stop, or Ctrl-C
     try:
-        await asyncio.wait(
-            [listener, sender],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        await asyncio.wait([listener, sender],
+                           return_when=asyncio.FIRST_COMPLETED)
     except asyncio.CancelledError:
         pass
     finally:
@@ -345,4 +424,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print()
-        print(_col(DIM, "  Interrupted. Goodbye."))
+        print(_c(DIM, "  Interrupted. Goodbye."))
