@@ -62,16 +62,16 @@ USEFUL PATTERN — how to save a new row:
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from .models import User, Message, get_db
+from .models import get_db
 from .schemas import (
     RegisterRequest, LoginRequest, TokenResponse,
     SendMessageRequest, MessageResponse,
 )
-from .auth import hash_password, verify_password, create_token, require_auth
-from .crypto import encrypt, decrypt
+from .auth import require_auth
+from . import services
 
 
 log = logging.getLogger(__name__)
@@ -83,20 +83,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 def register(body: RegisterRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == body.username).first()
-    if user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already registered"
-        )
-    
-    hashed_password = hash_password(body.password)
-    new_user = User(username=body.username, password_hash=hashed_password)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    return {"message": "User registered successfully"}
+    return services.register_user(body, db)
 
 
 # ---------------------------------------------------------------------------
@@ -104,16 +91,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == body.username).first()
-    if not user or not verify_password(body.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    access_token = create_token(user.username) 
-    return {"access_token": access_token, "token_type": "bearer"}
+    return services.authenticate_user(body, db)
 
 # ---------------------------------------------------------------------------
 # TODO 3 — Send a message (authenticated)
@@ -124,23 +102,7 @@ def send_message(
     db: Session = Depends(get_db),
     username: str = Depends(require_auth),
 ):
-    ciphertext = encrypt(body.content)
-    new_message = Message(
-        sender=username,
-        recipient=body.recipient,
-        ciphertext=ciphertext
-    )
-    db.add(new_message)
-    db.commit()
-    db.refresh(new_message)
-    
-    return MessageResponse(
-        id=new_message.id,
-        sender=new_message.sender,
-        recipient=new_message.recipient,
-        content=body.content,
-        created_at=new_message.created_at
-    )
+    return services.process_send_message(body, username, db)
 
 
 # ---------------------------------------------------------------------------
@@ -151,18 +113,4 @@ def get_messages(
     db: Session = Depends(get_db),
     username: str = Depends(require_auth),
 ):
-    messages = db.query(Message).filter(
-        (Message.sender == username) | (Message.recipient == username)
-    ).order_by(Message.created_at).all()
-    
-    result = []
-    for msg in messages:
-        decrypted_content = decrypt(msg.ciphertext)
-        result.append(MessageResponse(
-            id=msg.id,
-            sender=msg.sender,
-            recipient=msg.recipient,
-            content=decrypted_content,
-            created_at=msg.created_at
-        ))
-    return result
+    return services.fetch_messages(username, db)
