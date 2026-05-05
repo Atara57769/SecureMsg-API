@@ -1,3 +1,4 @@
+import logging
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 
@@ -8,6 +9,8 @@ from .schemas import (
 )
 from .auth import hash_password, verify_password, create_token
 from .crypto import encrypt, decrypt
+
+log = logging.getLogger(__name__)
 
 def register_user(body: RegisterRequest, db: Session) -> dict:
     user = repository.get_user_by_username(db, body.username)
@@ -20,6 +23,7 @@ def register_user(body: RegisterRequest, db: Session) -> dict:
     hashed_password = hash_password(body.password)
     repository.create_user(db, body.username, hashed_password)
     
+    log.info("New user registered: '%s'", body.username)
     return {"message": "User registered successfully"}
 
 def authenticate_user(body: LoginRequest, db: Session) -> dict:
@@ -32,6 +36,7 @@ def authenticate_user(body: LoginRequest, db: Session) -> dict:
         )
     
     access_token = create_token(user.username) 
+    log.info("User logged in: '%s'", user.username)
     return {"access_token": access_token, "token_type": "bearer"}
 
 def process_send_message(body: SendMessageRequest, username: str, db: Session) -> MessageResponse:
@@ -43,6 +48,7 @@ def process_send_message(body: SendMessageRequest, username: str, db: Session) -
         ciphertext=ciphertext
     )
     
+    log.info("Message sent: '%s' -> '%s'", username, body.recipient)
     return MessageResponse(
         id=new_message.id,
         sender=new_message.sender,
