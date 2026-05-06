@@ -159,7 +159,7 @@ class TestEncryption:
         # send a message
         client.post(
             "/messages",
-            json={"content": "my secret message", "recipient": "bob"},
+            json={"content": "my secret message", "recipients": ["bob"]},
             headers=auth(token)
         )
         
@@ -188,20 +188,39 @@ class TestMessaging:
 
         response = client.post(
             "/messages",
-            json={"content": "hello bob", "recipient": "bob"},
+            json={"content": "hello bob", "recipients": ["bob"]},
             headers=auth(alice_token),
         )
         assert response.status_code == 201
-        data = response.json()
+        data_list = response.json()
+        assert isinstance(data_list, list)
+        assert len(data_list) == 1
+        data = data_list[0]
         assert data["content"] == "hello bob"   # returned decrypted
         assert data["sender"] == "alice"
         assert data["recipient"] == "bob"
+
+    def test_send_message_multi_success(self, client):
+        alice_token = register_and_login(client, "alice", "secret123")
+        register_and_login(client, "bob", "secret456")
+        register_and_login(client, "charlie", "secret789")
+
+        response = client.post(
+            "/messages",
+            json={"content": "hello team", "recipients": ["bob", "charlie"]},
+            headers=auth(alice_token),
+        )
+        assert response.status_code == 201
+        data_list = response.json()
+        assert len(data_list) == 2
+        assert {d["recipient"] for d in data_list} == {"bob", "charlie"}
+        assert all(d["content"] == "hello team" for d in data_list)
 
     def test_get_messages_returns_decrypted(self, client):
         alice_token = register_and_login(client, "alice", "secret123")
         register_and_login(client, "bob", "secret456")
 
-        client.post("/messages", json={"content": "hi bob", "recipient": "bob"}, headers=auth(alice_token))
+        client.post("/messages", json={"content": "hi bob", "recipients": ["bob"]}, headers=auth(alice_token))
 
         response = client.get("/messages", headers=auth(alice_token))
         assert response.status_code == 200
@@ -219,10 +238,10 @@ class TestMessaging:
         charlie_token = register_and_login(client, "charlie", "secret789")
 
         # alice → bob
-        client.post("/messages", json={"content": "hello bob", "recipient": "bob"}, headers=auth(alice_token))
+        client.post("/messages", json={"content": "hello bob", "recipients": ["bob"]}, headers=auth(alice_token))
         
         # charlie → bob  (alice should NOT see this)
-        client.post("/messages", json={"content": "hi bob from charlie", "recipient": "bob"}, headers=auth(charlie_token))
+        client.post("/messages", json={"content": "hi bob from charlie", "recipients": ["bob"]}, headers=auth(charlie_token))
         
         # verify alice sees only her messages
         alice_response = client.get("/messages", headers=auth(alice_token))

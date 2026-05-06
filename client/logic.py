@@ -59,8 +59,8 @@ def show_help(current_recipient: str) -> None:
     print(c(CYAN,  "  ┌─ Commands ────────────────────────────────────────────┐"))
     print(c(CYAN,  "  │") + f"  Just type a message → sent to "
           + c(BOLD, current_recipient))
-    print(c(CYAN,  "  │") + "  " + c(BOLD, "/to <name>")
-          + "   — switch conversation partner")
+    print(c(CYAN,  "  │") + "  " + c(BOLD, "/to <name1, name2, ...>")
+          + "   — switch conversation partner(s)")
     print(c(CYAN,  "  │") + "  " + c(BOLD, "/list")
           + "        — show full message history")
     print(c(CYAN,  "  │") + "  " + c(BOLD, "/help")
@@ -119,9 +119,11 @@ async def fetch_history(client: httpx.AsyncClient, base: str,
     messages = r.json()
 
     if filter_username:
+        # Support multiple recipients separated by commas
+        targets = {name.strip() for name in filter_username.split(",")}
         messages = [m for m in messages
-                    if m["sender"] == filter_username
-                    or m["recipient"] == filter_username]
+                    if (m["sender"] == me and m["recipient"] in targets)
+                    or (m["recipient"] == me and m["sender"] in targets)]
 
     if not messages:
         info("No messages yet.")
@@ -212,7 +214,7 @@ async def input_loop(base: str, token: str, me: str,
 
                 elif cmd == "/to":
                     if len(parts) < 2 or not parts[1].strip():
-                        err("Usage: /to <username>")
+                        err("Usage: /to <username1, username2, ...>")
                     else:
                         new_partner = parts[1].strip()
                         state.recipient = new_partner
@@ -235,9 +237,13 @@ async def input_loop(base: str, token: str, me: str,
 
                 continue
 
+            recipients = [r.strip() for r in state.recipient.split(",") if r.strip()]
+            if not recipients:
+                continue
+                
             r = await send_client.post(
                 f"{base}/messages",
-                json={"recipient": state.recipient, "content": line},
+                json={"recipients": recipients, "content": line},
                 headers={"Authorization": f"Bearer {token}"},
             )
             if r.status_code != 201:
