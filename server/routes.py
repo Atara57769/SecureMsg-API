@@ -114,7 +114,9 @@ async def send_message(
         "content":   msg.content,
         "created_at": msg.created_at.isoformat(),
     }
-    await broadcaster.broadcast(event)
+    await broadcaster.broadcast(msg.recipient, event)
+    if msg.sender != msg.recipient:
+        await broadcaster.broadcast(msg.sender, event)
     return msg
 
 
@@ -157,7 +159,7 @@ async def stream(
                             detail="Invalid or expired token")
 
     log.info("SSE connection opened by '%s'", username)
-    q = broadcaster.subscribe()
+    q = broadcaster.subscribe(username)
 
     async def event_generator():
         try:
@@ -175,7 +177,7 @@ async def stream(
                     # SSE comment — invisible to the client, but prevents connection timeout
                     yield ": heartbeat\n\n"
         finally:
-            broadcaster.unsubscribe(q)
+            broadcaster.unsubscribe(username, q)
             log.info("SSE connection closed for '%s'", username)
 
     return StreamingResponse(
