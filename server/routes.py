@@ -99,25 +99,43 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 # TODO 3 — Send a message (authenticated)
 # ---------------------------------------------------------------------------
-@router.post("/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/messages", response_model=list[MessageResponse], status_code=status.HTTP_201_CREATED)
 async def send_message(
     body: SendMessageRequest,
     db: Session = Depends(get_db),
     username: str = Depends(require_auth),
 ):
-    msg = services.process_send_message(body, username, db)
-    # Push the new message to all SSE listeners in real-time
-    event = {
-        "id":        msg.id,
-        "sender":    msg.sender,
-        "recipient": msg.recipient,
-        "content":   msg.content,
-        "created_at": msg.created_at.isoformat(),
-    }
-    await broadcaster.broadcast(msg.recipient, event)
-    if msg.sender != msg.recipient:
-        await broadcaster.broadcast(msg.sender, event)
-    return msg
+    messages = services.process_send_message(body, username, db)
+    
+    # Push the new messages to all SSE listeners in real-time
+    tasks = []
+    
+    # 1. Broadcast to each recipient individually
+    for msg in messages:
+        event = {
+            "id":        msg.id,
+            "sender":    msg.sender,
+            "recipient": msg.recipient,
+            "content":   msg.content,
+            "created_at": msg.created_at.isoformat(),
+        }
+        if msg.sender != msg.recipient:
+            tasks.append(broadcaster.broadcast(msg.recipient, event))
+            
+    # 2. Broadcast a single combined event to the sender (one entry for multiple recipients)
+    if messages:
+        all_recipients = ", ".join(body.recipients)
+        sender_event = {
+            "id":         messages[0].id,
+            "sender":     username,
+            "recipient":  all_recipients,
+            "content":    body.content,
+            "created_at": messages[0].created_at.isoformat(),
+        }
+        tasks.append(broadcaster.broadcast(username, sender_event))
+            
+    await asyncio.gather(*tasks)
+    return messages
 
 
 # ---------------------------------------------------------------------------

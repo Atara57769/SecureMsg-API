@@ -39,23 +39,27 @@ def authenticate_user(body: LoginRequest, db: Session) -> dict:
     log.info("User logged in: '%s'", user.username)
     return {"access_token": access_token, "token_type": "bearer"}
 
-def process_send_message(body: SendMessageRequest, username: str, db: Session) -> MessageResponse:
+def process_send_message(body: SendMessageRequest, username: str, db: Session) -> list[MessageResponse]:
     ciphertext = encrypt(body.content)
-    new_message = repository.create_message(
-        db, 
-        sender=username, 
-        recipient=body.recipient, 
-        ciphertext=ciphertext
-    )
+    results = []
     
-    log.info("Message sent: '%s' -> '%s'", username, body.recipient)
-    return MessageResponse(
-        id=new_message.id,
-        sender=new_message.sender,
-        recipient=new_message.recipient,
-        content=body.content,
-        created_at=new_message.created_at
-    )
+    for recipient in body.recipients:
+        new_message = repository.create_message(
+            db, 
+            sender=username, 
+            recipient=recipient, 
+            ciphertext=ciphertext
+        )
+        log.info("Message sent: '%s' -> '%s'", username, recipient)
+        results.append(MessageResponse(
+            id=new_message.id,
+            sender=new_message.sender,
+            recipient=new_message.recipient,
+            content=body.content,
+            created_at=new_message.created_at
+        ))
+        
+    return results
 
 def fetch_messages(username: str, db: Session) -> list[MessageResponse]:
     messages = repository.get_messages_for_user(db, username)

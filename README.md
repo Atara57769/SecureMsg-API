@@ -7,7 +7,7 @@ A lightweight, secure, and real-time messaging platform built with FastAPI and P
 - **End-to-End Encryption (E2EE)**: Messages are encrypted using **AES-256-GCM** before being stored in the database.
 - **Secure Authentication**: User passwords are hashed using **Bcrypt**. Session management is handled via **JWT (JSON Web Tokens)**.
 - **Real-Time Messaging**: Implements **Server-Sent Events (SSE)** for instant message delivery to connected clients.
-- **Interactive CLI Client**: A feature-rich command-line interface for chatting, managing conversations, and viewing history.
+- **Interactive CLI Client**: A feature-rich command-line interface for chatting, managing conversations, and viewing history. Supports **multi-user messaging** via comma-separated usernames.
 - **Persistent Storage**: Uses **SQLite** with **SQLAlchemy ORM** for reliable data management.
 
 ## Tech Stack
@@ -85,8 +85,8 @@ This will execute all authentication and messaging tests to ensure everything is
 
 Inside the interactive chat client, you can use the following commands:
 
-- `/to <username>`: Switch the conversation to a different user.
-- `/list`: Show full message history with the current partner.
+- `/to <user1, user2, ...>`: Switch the conversation to one or more users (separated by commas).
+- `/list`: Show full message history with the current partner(s).
 - `/help`: Display the help menu.
 - `/quit` or `/exit`: Exit the application.
 

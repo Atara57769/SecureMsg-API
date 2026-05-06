@@ -50,8 +50,8 @@ class TokenResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class SendMessageRequest(BaseModel):
-    content:   str = Field(min_length=1, max_length=2000)
-    recipient: str = Field(min_length=3, max_length=50)   # who is this message for?
+    content:    str = Field(min_length=1, max_length=2000)
+    recipients: list[str] = Field(min_length=1)   # who are these messages for?
 
 
 class MessageResponse(BaseModel):
