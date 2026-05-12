@@ -15,3 +15,5 @@ env/
 .idea/
 
 .pytest_cache/
+
+.messenger.key
