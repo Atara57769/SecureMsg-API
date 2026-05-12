@@ -10,6 +10,7 @@ test_messenger.db
 venv/
 env/
 .env
+.messenger.key
 
 .vscode/
 .idea/
