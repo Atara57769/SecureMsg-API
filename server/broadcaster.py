@@ -22,14 +22,15 @@ from collections import defaultdict
 
 log = logging.getLogger(__name__)
 
-# The map of username -> set of connected client queues.
-_subscribers: dict[str, set[asyncio.Queue]] = defaultdict(set)
+# The map of username -> list of connected client queues.
+# Using a list ensures stable ordering for tests and predictable broadcasting.
+_subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
 
 
 def subscribe(username: str) -> asyncio.Queue:
     """Register a new SSE listener for *username* and return its personal queue."""
     q: asyncio.Queue = asyncio.Queue()
-    _subscribers[username].add(q)
+    _subscribers[username].append(q)
     log.info("SSE subscriber added for '%s' (total user queues=%d)",
              username, len(_subscribers[username]))
     return q
@@ -38,7 +39,8 @@ def subscribe(username: str) -> asyncio.Queue:
 def unsubscribe(username: str, q: asyncio.Queue) -> None:
     """Remove a listener for *username* when its connection closes."""
     if username in _subscribers:
-        _subscribers[username].discard(q)
+        if q in _subscribers[username]:
+            _subscribers[username].remove(q)
         if not _subscribers[username]:
             del _subscribers[username]
     log.info("SSE subscriber removed for '%s'", username)
@@ -49,18 +51,19 @@ async def broadcast(username: str, event: Any) -> None:
     if username not in _subscribers:
         return
 
-    dead: set[asyncio.Queue] = set()
-    for q in _subscribers[username]:
+    # Take a snapshot of the current subscribers to avoid issues if the list 
+    # changes while we are iterating (e.g. if someone unsubscribes).
+    current_queues = list(_subscribers[username])
+    
+    for q in current_queues:
         try:
             q.put_nowait(event)
         except asyncio.QueueFull:
             # If a slow client's queue is full, drop the event for that client
             # rather than blocking the whole broadcast.
-            dead.add(q)
+            if q in _subscribers[username]:
+                _subscribers[username].remove(q)
             log.warning("SSE client queue full for '%s' — dropping event", username)
-
-    for q in dead:
-        _subscribers[username].discard(q)
     
     if username in _subscribers and not _subscribers[username]:
         del _subscribers[username]
