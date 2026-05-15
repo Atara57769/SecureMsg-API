@@ -34,14 +34,27 @@ def ts(iso: str) -> str:
         return "??:??"
 
 def print_message(sender: str, recipient: str, content: str,
-                  created_at: str, me: str) -> None:
+                  created_at: str, me: str, msg_id: int | None = None,
+                  is_edited: bool = False, is_deleted: bool = False) -> None:
     time_str = ts(created_at)
     mine = sender == me
     colour = YELLOW if mine else MAGENTA
     arrow  = c(DIM, "→")
+    
+    status_suffix = ""
+    if is_deleted:
+        status_suffix = c(RED, " [DELETED]")
+    elif is_edited:
+        status_suffix = c(CYAN, " [EDITED]")
+
+    id_str = f" #{msg_id}" if msg_id is not None else ""
     header = (f"  {c(colour, sender)} {arrow} {c(DIM, recipient)}  "
-              f"{c(DIM, time_str)}")
-    body   = f"    {c(WHITE, content)}"
+              f"{c(DIM, time_str)}{c(DIM, id_str)}{status_suffix}")
+    
+    if is_deleted:
+        body = f"    {c(DIM, '(message deleted)')}"
+    else:
+        body = f"    {c(WHITE, content)}"
     print(f"\r{header}\n{body}")   # \r clears any partial input line
 
 def info(msg: str)  -> None: print(c(DIM,   f"  ℹ  {msg}"))
@@ -63,6 +76,10 @@ def show_help(current_recipient: str) -> None:
           + "   — switch conversation partner(s)")
     print(c(CYAN,  "  │") + "  " + c(BOLD, "/list")
           + "        — show full message history")
+    print(c(CYAN,  "  │") + "  " + c(BOLD, "/edit <id> <text>")
+          + " — edit a message you sent")
+    print(c(CYAN,  "  │") + "  " + c(BOLD, "/delete <id>")
+          + "      — delete a message you sent")
     print(c(CYAN,  "  │") + "  " + c(BOLD, "/help")
           + "        — show this help")
     print(c(CYAN,  "  │") + "  " + c(BOLD, "/quit")
@@ -133,7 +150,10 @@ async def fetch_history(client: httpx.AsyncClient, base: str,
     info(f"─── History ({label}, {len(messages)} messages) ─────────────")
     for msg in messages:
         print_message(msg["sender"], msg["recipient"],
-                      msg["content"], msg["created_at"], me)
+                      msg["content"], msg["created_at"], me,
+                      msg_id=msg.get("id"),
+                      is_edited=msg.get("updated_at") is not None,
+                      is_deleted=msg.get("is_deleted", False))
     info("─── End of history ──────────────────────────────────────")
 
 async def listen_stream(base: str, token: str, me: str,
@@ -162,12 +182,34 @@ async def listen_stream(base: str, token: str, me: str,
                                 if line.startswith("data:"):
                                     payload = line[len("data:"):].strip()
                                     try:
-                                        msg = json.loads(payload)
-                                        print_message(
-                                            msg["sender"], msg["recipient"],
-                                            msg["content"], msg["created_at"],
-                                            me,
-                                        )
+                                        data = json.loads(payload)
+                                        event_type = data.get("type", "message")
+                                        
+                                        if event_type == "presence":
+                                            username = data.get("username")
+                                            status = data.get("status")
+                                            info(f"User {c(BOLD, username)} is now {c(CYAN, status)}")
+                                        elif event_type == "edit":
+                                            info(f"Message #{data['id']} was edited by {data['sender']}")
+                                            print_message(
+                                                data["sender"], data["recipient"],
+                                                data["content"], data["created_at"],
+                                                me, msg_id=data["id"], is_edited=True
+                                            )
+                                        elif event_type == "delete":
+                                            info(f"Message #{data['id']} was deleted by {data['sender']}")
+                                            print_message(
+                                                data["sender"], data["recipient"],
+                                                "", data.get("created_at", "now"),
+                                                me, msg_id=data["id"], is_deleted=True
+                                            )
+                                        else:
+                                            # Regular message or unknown event type
+                                            print_message(
+                                                data["sender"], data["recipient"],
+                                                data["content"], data["created_at"],
+                                                me, msg_id=data.get("id")
+                                            )
                                     except json.JSONDecodeError:
                                         pass
 
@@ -231,6 +273,39 @@ async def input_loop(base: str, token: str, me: str,
 
                 elif cmd == "/help":
                     show_help(state.recipient)
+
+                elif cmd == "/edit":
+                    if len(parts) < 2:
+                        err("Usage: /edit <id> <new text>")
+                    else:
+                        edit_parts = parts[1].split(maxsplit=1)
+                        if len(edit_parts) < 2:
+                            err("Usage: /edit <id> <new text>")
+                        else:
+                            msg_id, new_text = edit_parts
+                            r = await send_client.patch(
+                                f"{base}/messages/{msg_id}",
+                                json={"content": new_text},
+                                headers={"Authorization": f"Bearer {token}"},
+                            )
+                            if r.status_code == 200:
+                                ok(f"Message #{msg_id} updated.")
+                            else:
+                                err(f"Edit failed ({r.status_code}): {r.text}")
+
+                elif cmd == "/delete":
+                    if len(parts) < 2:
+                        err("Usage: /delete <id>")
+                    else:
+                        msg_id = parts[1].strip()
+                        r = await send_client.delete(
+                            f"{base}/messages/{msg_id}",
+                            headers={"Authorization": f"Bearer {token}"},
+                        )
+                        if r.status_code == 200:
+                            ok(f"Message #{msg_id} deleted.")
+                        else:
+                            err(f"Delete failed ({r.status_code}): {r.text}")
 
                 else:
                     err(f"Unknown command '{cmd}'. Type /help for options.")
