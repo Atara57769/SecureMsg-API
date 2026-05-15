@@ -13,7 +13,7 @@ class TestSSEStream:
         await register_and_login_async(async_client, "bob",   "secret456")
 
         # Directly subscribe to the broadcaster to verify real-time delivery
-        q = broadcaster.subscribe("bob")
+        q = await broadcaster.subscribe("bob")
         try:
             await async_client.post(
                 "/messages",
@@ -22,11 +22,15 @@ class TestSSEStream:
             )
 
             # Wait for the message in the queue (direct verification)
-            result = await asyncio.wait_for(q.get(), timeout=2.0)
-            assert result["content"] == "sse test"
-            assert result["sender"] == "alice"
+            while True:
+                result = await asyncio.wait_for(q.get(), timeout=2.0)
+                if result.get("type") == "presence":
+                    continue
+                assert result["content"] == "sse test"
+                assert result["sender"] == "alice"
+                break
         finally:
-            broadcaster.unsubscribe("bob", q)
+            await broadcaster.unsubscribe("bob", q)
 
 
 @pytest.mark.asyncio
@@ -37,8 +41,8 @@ class TestSSEConcurrent:
         bob_token   = await register_and_login_async(async_client, "bob",   "secret456")
 
         # Subscribe both users
-        q_alice = broadcaster.subscribe("alice")
-        q_bob   = broadcaster.subscribe("bob")
+        q_alice = await broadcaster.subscribe("alice")
+        q_bob   = await broadcaster.subscribe("bob")
         
         try:
             # Send messages
@@ -59,6 +63,8 @@ class TestSSEConcurrent:
             async def find_msg(q, content):
                 while True:
                     m = await asyncio.wait_for(q.get(), timeout=2.0)
+                    if m.get("type") == "presence":
+                        continue
                     if m["content"] == content:
                         return m
 
@@ -68,8 +74,8 @@ class TestSSEConcurrent:
             assert res_bob["content"] == "hi bob"
             assert res_alice["content"] == "hi alice"
         finally:
-            broadcaster.unsubscribe("alice", q_alice)
-            broadcaster.unsubscribe("bob", q_bob)
+            await broadcaster.unsubscribe("alice", q_alice)
+            await broadcaster.unsubscribe("bob", q_bob)
 
 
 @pytest.mark.asyncio

@@ -71,7 +71,7 @@ from sqlalchemy.orm import Session
 from .models import get_db
 from .schemas import (
     RegisterRequest, LoginRequest, TokenResponse,
-    SendMessageRequest, MessageResponse,
+    SendMessageRequest, MessageResponse, OnlineUsersResponse,
 )
 from .auth import require_auth, decode_token
 from . import services, broadcaster
@@ -150,6 +150,15 @@ def get_messages(
 
 
 # ---------------------------------------------------------------------------
+# Bonus 3 — Presence Indicator
+# ---------------------------------------------------------------------------
+@router.get("/users/online", response_model=OnlineUsersResponse)
+def get_online_users(username: str = Depends(require_auth)):
+    """Return list of currently connected users."""
+    return {"online_users": broadcaster.get_active_users()}
+
+
+# ---------------------------------------------------------------------------
 # SSE stream — real-time push of new messages to connected clients
 # ---------------------------------------------------------------------------
 @router.get("/stream")
@@ -194,7 +203,7 @@ async def stream(
                             detail="Session invalidated (logged in elsewhere)")
 
     log.info("SSE connection opened by '%s' (version %d)", username, version)
-    q = broadcaster.subscribe(username)
+    q = await broadcaster.subscribe(username)
 
     async def event_generator():
         try:
@@ -212,7 +221,7 @@ async def stream(
                     # SSE comment — invisible to the client, but prevents connection timeout
                     yield ": heartbeat\n\n"
         finally:
-            broadcaster.unsubscribe(username, q)
+            await broadcaster.unsubscribe(username, q)
             log.info("SSE connection closed for '%s'", username)
 
     return StreamingResponse(

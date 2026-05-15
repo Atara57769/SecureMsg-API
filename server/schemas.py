@@ -62,3 +62,7 @@ class MessageResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class OnlineUsersResponse(BaseModel):
+    online_users: list[str]

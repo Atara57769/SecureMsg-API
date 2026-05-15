@@ -27,22 +27,56 @@ log = logging.getLogger(__name__)
 _subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
 
 
-def subscribe(username: str) -> asyncio.Queue:
+def get_active_users() -> list[str]:
+    """Return a list of usernames that currently have at least one active connection."""
+    return list(_subscribers.keys())
+
+
+async def broadcast_all(event: Any) -> None:
+    """Push *event* to EVERY currently-connected client queue."""
+    tasks = []
+    # Use list() to avoid issues if _subscribers changes during iteration
+    for username in list(_subscribers.keys()):
+        tasks.append(broadcast(username, event))
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
+async def subscribe(username: str) -> asyncio.Queue:
     """Register a new SSE listener for *username* and return its personal queue."""
     q: asyncio.Queue = asyncio.Queue()
+    
+    # If this is the user's first connection, they are now 'online'
+    is_first = (username not in _subscribers)
+    
     _subscribers[username].append(q)
+    
+    if is_first:
+        await broadcast_all({
+            "type": "presence",
+            "username": username,
+            "status": "online"
+        })
+        
     log.info("SSE subscriber added for '%s' (total user queues=%d)",
              username, len(_subscribers[username]))
     return q
 
 
-def unsubscribe(username: str, q: asyncio.Queue) -> None:
+async def unsubscribe(username: str, q: asyncio.Queue) -> None:
     """Remove a listener for *username* when its connection closes."""
     if username in _subscribers:
         if q in _subscribers[username]:
             _subscribers[username].remove(q)
         if not _subscribers[username]:
             del _subscribers[username]
+            # If that was their last connection, they are now 'offline'
+            await broadcast_all({
+                "type": "presence",
+                "username": username,
+                "status": "offline"
+            })
+            
     log.info("SSE subscriber removed for '%s'", username)
 
 
