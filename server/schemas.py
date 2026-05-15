@@ -54,12 +54,18 @@ class SendMessageRequest(BaseModel):
     recipients: list[str] = Field(min_length=1)   # who are these messages for?
 
 
+class UpdateMessageRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+
+
 class MessageResponse(BaseModel):
     id:         int
     sender:     str
     recipient:  str
     content:    str       # always decrypted plain text — never expose ciphertext
     created_at: datetime
+    updated_at: datetime | None = None
+    is_deleted: bool = False
 
     model_config = {"from_attributes": True}
 

@@ -39,7 +39,7 @@ USEFUL REFERENCE:
 
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, String, Text, DateTime
+from sqlalchemy import create_engine, String, Text, DateTime, Boolean
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from datetime import datetime, timezone
 from sqlalchemy import String, DateTime
@@ -123,6 +123,16 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, 
         default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=True,
+        onupdate=lambda: datetime.now(timezone.utc)
+    )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False
     )
 def create_tables():
     """Creates all tables in the database if they don't exist yet."""

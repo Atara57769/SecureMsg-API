@@ -72,6 +72,7 @@ from .models import get_db
 from .schemas import (
     RegisterRequest, LoginRequest, TokenResponse,
     SendMessageRequest, MessageResponse, OnlineUsersResponse,
+    UpdateMessageRequest,
 )
 from .auth import require_auth, decode_token
 from . import services, broadcaster
@@ -147,6 +148,55 @@ def get_messages(
     username: str = Depends(require_auth),
 ):
     return services.fetch_messages(username, db)
+
+
+@router.patch("/messages/{message_id}", response_model=MessageResponse)
+async def patch_message(
+    message_id: int,
+    body: UpdateMessageRequest,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_auth),
+):
+    msg = services.edit_message(message_id, username, body, db)
+    
+    # Broadcast edit event
+    event = {
+        "type": "edit",
+        "id": msg.id,
+        "sender": msg.sender,
+        "recipient": msg.recipient,
+        "content": msg.content,
+        "created_at": msg.created_at.isoformat(),
+        "updated_at": msg.updated_at.isoformat() if msg.updated_at else None,
+    }
+    await asyncio.gather(
+        broadcaster.broadcast(msg.recipient, event),
+        broadcaster.broadcast(msg.sender, event)
+    )
+    return msg
+
+
+@router.delete("/messages/{message_id}", response_model=MessageResponse)
+async def delete_message(
+    message_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_auth),
+):
+    msg = services.delete_message(message_id, username, db)
+    
+    # Broadcast delete event
+    event = {
+        "type": "delete",
+        "id": msg.id,
+        "sender": msg.sender,
+        "recipient": msg.recipient,
+        "is_deleted": True,
+    }
+    await asyncio.gather(
+        broadcaster.broadcast(msg.recipient, event),
+        broadcaster.broadcast(msg.sender, event)
+    )
+    return msg
 
 
 # ---------------------------------------------------------------------------

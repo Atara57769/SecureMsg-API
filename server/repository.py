@@ -24,5 +24,16 @@ def create_message(db: Session, sender: str, recipient: str, ciphertext: str) ->
 
 def get_messages_for_user(db: Session, username: str) -> list[Message]:
     return db.query(Message).filter(
-        (Message.sender == username) | (Message.recipient == username)
+        ((Message.sender == username) | (Message.recipient == username)),
+        Message.is_deleted == False
     ).order_by(Message.created_at).all()
+
+def get_message_by_id(db: Session, message_id: int) -> Message | None:
+    return db.query(Message).filter(Message.id == message_id).first()
+
+def update_message(db: Session, message: Message, **kwargs) -> Message:
+    for key, value in kwargs.items():
+        setattr(message, key, value)
+    db.commit()
+    db.refresh(message)
+    return message

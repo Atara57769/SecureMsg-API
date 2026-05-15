@@ -5,7 +5,7 @@ from fastapi import HTTPException, status
 from . import repository
 from .schemas import (
     RegisterRequest, LoginRequest, TokenResponse,
-    SendMessageRequest, MessageResponse
+    SendMessageRequest, MessageResponse, UpdateMessageRequest
 )
 from .auth import hash_password, verify_password, create_token
 from .crypto import encrypt, decrypt
@@ -61,7 +61,9 @@ def process_send_message(body: SendMessageRequest, username: str, db: Session) -
             sender=new_message.sender,
             recipient=new_message.recipient,
             content=body.content,
-            created_at=new_message.created_at
+            created_at=new_message.created_at,
+            updated_at=new_message.updated_at,
+            is_deleted=new_message.is_deleted
         ))
         
     return results
@@ -77,6 +79,52 @@ def fetch_messages(username: str, db: Session) -> list[MessageResponse]:
             sender=msg.sender,
             recipient=msg.recipient,
             content=decrypted_content,
-            created_at=msg.created_at
+            created_at=msg.created_at,
+            updated_at=msg.updated_at,
+            is_deleted=msg.is_deleted
         ))
     return result
+
+def edit_message(message_id: int, username: str, body: UpdateMessageRequest, db: Session) -> MessageResponse:
+    message = repository.get_message_by_id(db, message_id)
+    if not message:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    
+    if message.sender != username:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only edit your own messages")
+    
+    if message.is_deleted:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot edit a deleted message")
+        
+    ciphertext = encrypt(body.content)
+    repository.update_message(db, message, ciphertext=ciphertext)
+    
+    return MessageResponse(
+        id=message.id,
+        sender=message.sender,
+        recipient=message.recipient,
+        content=body.content,
+        created_at=message.created_at,
+        updated_at=message.updated_at,
+        is_deleted=message.is_deleted
+    )
+
+def delete_message(message_id: int, username: str, db: Session) -> MessageResponse:
+    message = repository.get_message_by_id(db, message_id)
+    if not message:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    
+    if message.sender != username:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only delete your own messages")
+    
+    repository.update_message(db, message, is_deleted=True)
+    
+    return MessageResponse(
+        id=message.id,
+        sender=message.sender,
+        recipient=message.recipient,
+        content="", # Content is hidden for deleted messages
+        created_at=message.created_at,
+        updated_at=message.updated_at,
+        is_deleted=message.is_deleted
+    )
