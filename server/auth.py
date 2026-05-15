@@ -76,6 +76,8 @@ import bcrypt
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.orm import Session
+from .models import User, get_db
 
 
 SECRET_KEY = "change-this-to-a-long-random-string-in-production"
@@ -110,28 +112,28 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ---------------------------------------------------------------------------
 # TODO 3 — Create a signed JWT token for a given username
 # ---------------------------------------------------------------------------
-def create_token(username: str) -> str:
+def create_token(username: str, version: int) -> str:
     """
-    Build a JWT payload with the username and an expiry time,
+    Build a JWT payload with the username, version, and an expiry time,
     then sign and return it as a string.
     Hint: use TOKEN_EXPIRE_HOURS and datetime.now(timezone.utc).
     """
     expire = datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRE_HOURS)
-    payload = {"sub": username, "exp": expire}
+    payload = {"sub": username, "version": version, "exp": expire}
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 # ---------------------------------------------------------------------------
 # TODO 4 — Decode and validate a JWT token
 # ---------------------------------------------------------------------------
-def decode_token(token: str) -> Optional[str]:
+def decode_token(token: str) -> Optional[dict]:
     """
-    Decode the token and return the username ("sub" field).
+    Decode the token and return the payload (containing "sub" and "version").
     Return None if the token is invalid or expired — do not raise.
     """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload.get("sub")
+        return payload
     except JWTError:
         return None
 
@@ -139,21 +141,46 @@ def decode_token(token: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # TODO 5 — FastAPI dependency: enforce authentication on a route
 # ---------------------------------------------------------------------------
-def require_auth(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -> str:
+def require_auth(
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer)
+) -> str:
     """
     Extract the Bearer token from the Authorization header,
     validate it with decode_token(), and return the username.
-    Raise HTTP 401 if the token is missing, invalid, or expired.
+    Raise HTTP 401 if the token is missing, invalid, or expired,
+    or if the login_version in the token does not match the DB.
 
     Usage in a route:
         def my_route(username: str = Depends(require_auth)):
     """
     token = credentials.credentials
-    username = decode_token(token)
-    if username is None:
+    payload = decode_token(token)
+    
+    if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    username = payload.get("sub")
+    version = payload.get("version")
+    
+    if username is None or version is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    # Validate version against database
+    user = db.query(User).filter(User.username == username).first()
+    if user is None or user.login_version != version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session invalidated (logged in elsewhere)",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
     return username

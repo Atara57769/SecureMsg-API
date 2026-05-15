@@ -156,6 +156,7 @@ def get_messages(
 async def stream(
     request: Request,
     token: str,                        # ?token=<JWT>  (query param for EventSource)
+    db: Session = Depends(get_db),
 ):
     """
     Open a persistent Server-Sent Events connection.
@@ -169,14 +170,30 @@ async def stream(
     The stream stays open indefinitely; a heartbeat comment is sent every
     15 seconds to keep proxies and firewalls from closing the connection.
     """
-    username = decode_token(token)
-    if username is None:
+    from .models import User
+    payload = decode_token(token)
+    if payload is None:
         # Return a proper HTTP 401 *before* the streaming response starts
         from fastapi import HTTPException
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Invalid or expired token")
+                            
+    username = payload.get("sub")
+    version = payload.get("version")
+    
+    if username is None or version is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid token payload")
+                            
+    # Validate version against database
+    user = db.query(User).filter(User.username == username).first()
+    if user is None or user.login_version != version:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Session invalidated (logged in elsewhere)")
 
-    log.info("SSE connection opened by '%s'", username)
+    log.info("SSE connection opened by '%s' (version %d)", username, version)
     q = broadcaster.subscribe(username)
 
     async def event_generator():

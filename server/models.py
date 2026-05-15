@@ -98,6 +98,12 @@ class User(Base):
         default=lambda: datetime.now(timezone.utc)
     )
 
+    login_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False
+    )
+
 # ---------------------------------------------------------------------------
 # TODO 2 — Define the Message table
 # ---------------------------------------------------------------------------

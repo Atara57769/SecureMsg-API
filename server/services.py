@@ -35,8 +35,13 @@ def authenticate_user(body: LoginRequest, db: Session) -> dict:
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = create_token(user.username) 
-    log.info("User logged in: '%s'", user.username)
+    # Increment login version to invalidate old sessions
+    user.login_version += 1
+    db.commit()
+    db.refresh(user)
+    
+    access_token = create_token(user.username, user.login_version) 
+    log.info("User logged in: '%s' (version %d)", user.username, user.login_version)
     return {"access_token": access_token, "token_type": "bearer"}
 
 def process_send_message(body: SendMessageRequest, username: str, db: Session) -> list[MessageResponse]:
