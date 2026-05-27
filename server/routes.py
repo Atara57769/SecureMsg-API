@@ -219,7 +219,7 @@ async def stream(
                     # Wait up to 15 s for a new message; send a keepalive comment if none
                     event = await asyncio.wait_for(q.get(), timeout=15.0)
                     payload = json.dumps(event)
-                    yield f"data: {payload}\n\n"
+                    yield f"event: message\ndata: {payload}\n\n"
                 except asyncio.TimeoutError:
                     # SSE comment — invisible to the client, but prevents connection timeout
                     yield ": heartbeat\n\n"

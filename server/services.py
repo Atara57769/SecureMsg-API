@@ -28,7 +28,17 @@ def register_user(body: RegisterRequest, db: Session) -> dict:
 
 def authenticate_user(body: LoginRequest, db: Session) -> dict:
     user = repository.get_user_by_username(db, body.username)
-    if not user or not verify_password(body.password, user.password_hash):
+    
+    # Timing attack mitigation: always execute a Bcrypt checkpw verification,
+    # even if the username does not exist, to make the computation time uniform.
+    # We use a structured, valid placeholder Bcrypt hash for non-existent users.
+    dummy_hash = "$2b$12$eImiTXuWVMtY.n89.B.6IuxA.X/g19g2588s77977.B8B8B8B8B8B"
+    stored_hash = user.password_hash if user else dummy_hash
+    
+    # Run Bcrypt verification (takes ~100ms)
+    password_valid = verify_password(body.password, stored_hash)
+    
+    if not user or not password_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",

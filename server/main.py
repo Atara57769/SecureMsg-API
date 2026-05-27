@@ -41,11 +41,22 @@ async def lifespan(app: FastAPI):
     yield
 
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="Secure Messenger — Stage 1",
     description="Authenticated, encrypted REST API for private messaging",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+# Configure CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(router)

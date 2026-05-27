@@ -99,6 +99,7 @@ A well-layered, secure application requires deliberate technology choices. Below
 * **The Rationale:** 
   * MD5 and SHA-256 are designed for speed (hashing gigabytes of data per second). While great for checksums, their speed makes them highly insecure for passwords—an attacker with a cheap GPU can guess billions of combinations per second.
   * Bcrypt is an **intentionally slow algorithm** with an adjustable workload cost factor. Each hash takes ~100ms, making brute-force dictionary attacks computationally infeasible. It also handles cryptographic salt generation automatically, protecting against rainbow table attacks.
+  * **Timing Oracle / Username Enumeration Mitigation:** A major security pitfall is timing leakage during `POST /login`—if the username is not found, Uvicorn would normally return instantly (~1ms), whereas a valid username triggers a Bcrypt check and takes ~100ms, exposing whether a username exists. To resolve this timing oracle risk, our server always performs a dummy Bcrypt verification using a placeholder hash whenever the user is not found, ensuring that both failed and successful logins take identical computation times.
 
 ### 2. Message Encryption: Why AES-256-GCM?
 * **The Decision:** Messages are encrypted at rest in the database using **AES-256** in **Galois/Counter Mode (GCM)** instead of Cipher Block Chaining (CBC).
