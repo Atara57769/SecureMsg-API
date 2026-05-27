@@ -69,6 +69,7 @@ CONCEPT 3 — FASTAPI DEPENDENCY INJECTION
     Authorization: Bearer eyJhbGc...
 """
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -80,7 +81,38 @@ from sqlalchemy.orm import Session
 from .models import User, get_db
 
 
-SECRET_KEY = "change-this-to-a-long-random-string-in-production"
+from pathlib import Path
+
+_JWT_KEY_FILE = Path(__file__).parent.parent / ".jwt.key"
+
+
+def _load_or_create_jwt_secret() -> str:
+    """
+    Load the JWT secret key so it survives server restarts:
+
+      1. MESSENGER_JWT_SECRET env var  — preferred in production
+      2. .jwt.key file in the project root — auto-created on first run
+
+    Without a stable key, every restart would invalidate all active user sessions.
+    """
+    # 1. Environment variable (set this in production / CI)
+    env_secret = os.environ.get("MESSENGER_JWT_SECRET")
+    if env_secret:
+        return env_secret
+
+    # 2. Persistent key file
+    if _JWT_KEY_FILE.exists():
+        return _JWT_KEY_FILE.read_text().strip()
+
+    # First run: generate, save, and use a fresh secure secret
+    import secrets
+    secret = secrets.token_hex(32)
+    _JWT_KEY_FILE.write_text(secret)
+    _JWT_KEY_FILE.chmod(0o600)   # owner-read-only
+    return secret
+
+
+SECRET_KEY = _load_or_create_jwt_secret()
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 

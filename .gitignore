@@ -18,3 +18,4 @@ env/
 .pytest_cache/
 
 .messenger.key
+.jwt.key
