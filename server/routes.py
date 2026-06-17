@@ -2,7 +2,6 @@
 import asyncio
 import json
 import logging
-from fastapi import HTTPException
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import StreamingResponse
@@ -14,7 +13,7 @@ from .schemas import (
     SendMessageRequest, MessageResponse, OnlineUsersResponse,
     UpdateMessageRequest,
 )
-from .auth import require_auth, decode_token
+from .auth import require_auth
 from . import services, broadcaster
 
 
@@ -38,49 +37,17 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     return services.authenticate_user(body, db)
 
 # ---------------------------------------------------------------------------
-# TODO 3 — Send a message (authenticated)
-# ---------------------------------------------------------------------------
 @router.post("/messages", response_model=list[MessageResponse], status_code=status.HTTP_201_CREATED)
 async def send_message(
     body: SendMessageRequest,
     db: Session = Depends(get_db),
     username: str = Depends(require_auth),
 ):
-    messages = services.process_send_message(body, username, db)
-    
-    # Push the new messages to all SSE listeners in real-time
-    tasks = []
-    
-    # 1. Broadcast to each recipient individually
-    for msg in messages:
-        event = {
-            "id":        msg.id,
-            "sender":    msg.sender,
-            "recipient": msg.recipient,
-            "content":   msg.content,
-            "created_at": msg.created_at.isoformat(),
-        }
-        if msg.sender != msg.recipient:
-            tasks.append(broadcaster.broadcast(msg.recipient, event))
-            
-    # 2. Broadcast a single combined event to the sender (one entry for multiple recipients)
-    if messages:
-        all_recipients = ", ".join(body.recipients)
-        sender_event = {
-            "id":         messages[0].id,
-            "sender":     username,
-            "recipient":  all_recipients,
-            "content":    body.content,
-            "created_at": messages[0].created_at.isoformat(),
-        }
-        tasks.append(broadcaster.broadcast(username, sender_event))
-            
-    await asyncio.gather(*tasks)
-    return messages
+    return await services.process_send_message(body, username, db)
 
 
 # ---------------------------------------------------------------------------
-# TODO 4 — Fetch messages (authenticated)
+# TODO 3 — Fetch messages (authenticated)
 # ---------------------------------------------------------------------------
 @router.get("/messages", response_model=list[MessageResponse])
 def get_messages(
@@ -97,24 +64,7 @@ async def patch_message(
     db: Session = Depends(get_db),
     username: str = Depends(require_auth),
 ):
-    msg = services.edit_message(message_id, username, body, db)
-    
-    # Broadcast edit event
-    event = {
-        "type": "edit",
-        "id": msg.id,
-        "sender": msg.sender,
-        "recipient": msg.recipient,
-        "content": msg.content,
-        "created_at": msg.created_at.isoformat(),
-        "updated_at": msg.updated_at.isoformat() if msg.updated_at else None,
-    }
-    await asyncio.gather(
-        broadcaster.broadcast(msg.recipient, event),
-        broadcaster.broadcast(msg.sender, event)
-    )
-    return msg
-
+    return await services.edit_message(message_id, username, body, db)
 
 @router.delete("/messages/{message_id}", response_model=MessageResponse)
 async def delete_message(
@@ -122,22 +72,7 @@ async def delete_message(
     db: Session = Depends(get_db),
     username: str = Depends(require_auth),
 ):
-    msg = services.delete_message(message_id, username, db)
-    
-    # Broadcast delete event
-    event = {
-        "type": "delete",
-        "id": msg.id,
-        "sender": msg.sender,
-        "recipient": msg.recipient,
-        "is_deleted": True,
-    }
-    await asyncio.gather(
-        broadcaster.broadcast(msg.recipient, event),
-        broadcaster.broadcast(msg.sender, event)
-    )
-    return msg
-
+    return await services.delete_message(message_id, username, db)
 
 # ---------------------------------------------------------------------------
 # Bonus 3 — Presence Indicator
@@ -176,34 +111,7 @@ async def stream(
     else:
         actual_token = token
 
-    if not actual_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing token"
-        )
-
-    from .models import User
-    payload = decode_token(actual_token)
-    if payload is None:
-        # Return a proper HTTP 401 *before* the streaming response starts
-        from fastapi import HTTPException
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Invalid or expired token")
-                            
-    username = payload.get("sub")
-    version = payload.get("version")
-    
-    if username is None or version is None:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Invalid token payload")
-                            
-    # Validate version against database
-    user = db.query(User).filter(User.username == username).first()
-    if user is None or user.login_version != version:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Session invalidated (logged in elsewhere)")
+    username, version = services.validate_stream_token(actual_token, db)
 
     log.info("SSE connection opened by '%s' (version %d)", username, version)
     q = await broadcaster.subscribe(username)

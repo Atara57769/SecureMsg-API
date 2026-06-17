@@ -1,8 +1,9 @@
+import asyncio
 import logging
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 
-from . import repository
+from . import repository, broadcaster
 from .schemas import (
     RegisterRequest, LoginRequest, TokenResponse,
     SendMessageRequest, MessageResponse, UpdateMessageRequest
@@ -54,7 +55,7 @@ def authenticate_user(body: LoginRequest, db: Session) -> dict:
     log.info("User logged in: '%s' (version %d)", user.username, user.login_version)
     return {"access_token": access_token, "token_type": "bearer"}
 
-def process_send_message(body: SendMessageRequest, username: str, db: Session) -> list[MessageResponse]:
+def save_message(body: SendMessageRequest, username: str, db: Session) -> list[MessageResponse]:
     ciphertext = encrypt(body.content)
     results = []
     
@@ -75,8 +76,41 @@ def process_send_message(body: SendMessageRequest, username: str, db: Session) -
             updated_at=new_message.updated_at,
             is_deleted=new_message.is_deleted
         ))
-        
     return results
+
+async def broadcast_new_messages(messages: list[MessageResponse], recipients: list[str], content: str, username: str) -> None:
+    tasks = []
+    
+    # 1. Broadcast to each recipient individually
+    for msg in messages:
+        event = {
+            "id":        msg.id,
+            "sender":    msg.sender,
+            "recipient": msg.recipient,
+            "content":   msg.content,
+            "created_at": msg.created_at.isoformat(),
+        }
+        if msg.sender != msg.recipient:
+            tasks.append(broadcaster.broadcast(msg.recipient, event))
+            
+    # 2. Broadcast a single combined event to the sender (one entry for multiple recipients)
+    if messages:
+        all_recipients = ", ".join(recipients)
+        sender_event = {
+            "id":         messages[0].id,
+            "sender":     username,
+            "recipient":  all_recipients,
+            "content":    content,
+            "created_at": messages[0].created_at.isoformat(),
+        }
+        tasks.append(broadcaster.broadcast(username, sender_event))
+            
+    await asyncio.gather(*tasks)
+
+async def process_send_message(body: SendMessageRequest, username: str, db: Session) -> list[MessageResponse]:
+    messages = save_message(body, username, db)
+    await broadcast_new_messages(messages, body.recipients, body.content, username)
+    return messages
 
 def fetch_messages(username: str, db: Session) -> list[MessageResponse]:
     messages = repository.get_messages_for_user(db, username)
@@ -95,7 +129,7 @@ def fetch_messages(username: str, db: Session) -> list[MessageResponse]:
         ))
     return result
 
-def edit_message(message_id: int, username: str, body: UpdateMessageRequest, db: Session) -> MessageResponse:
+def update_message_content(message_id: int, username: str, body: UpdateMessageRequest, db: Session) -> MessageResponse:
     message = repository.get_message_by_id(db, message_id)
     if not message:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
@@ -119,7 +153,27 @@ def edit_message(message_id: int, username: str, body: UpdateMessageRequest, db:
         is_deleted=message.is_deleted
     )
 
-def delete_message(message_id: int, username: str, db: Session) -> MessageResponse:
+async def broadcast_edit_event(msg: MessageResponse) -> None:
+    event = {
+        "type": "edit",
+        "id": msg.id,
+        "sender": msg.sender,
+        "recipient": msg.recipient,
+        "content": msg.content,
+        "created_at": msg.created_at.isoformat(),
+        "updated_at": msg.updated_at.isoformat() if msg.updated_at else None,
+    }
+    await asyncio.gather(
+        broadcaster.broadcast(msg.recipient, event),
+        broadcaster.broadcast(msg.sender, event)
+    )
+
+async def edit_message(message_id: int, username: str, body: UpdateMessageRequest, db: Session) -> MessageResponse:
+    msg = update_message_content(message_id, username, body, db)
+    await broadcast_edit_event(msg)
+    return msg
+
+def mark_message_deleted(message_id: int, username: str, db: Session) -> MessageResponse:
     message = repository.get_message_by_id(db, message_id)
     if not message:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
@@ -138,3 +192,62 @@ def delete_message(message_id: int, username: str, db: Session) -> MessageRespon
         updated_at=message.updated_at,
         is_deleted=message.is_deleted
     )
+
+async def broadcast_delete_event(msg: MessageResponse) -> None:
+    event = {
+        "type": "delete",
+        "id": msg.id,
+        "sender": msg.sender,
+        "recipient": msg.recipient,
+        "is_deleted": True,
+    }
+    await asyncio.gather(
+        broadcaster.broadcast(msg.recipient, event),
+        broadcaster.broadcast(msg.sender, event)
+    )
+
+async def delete_message(message_id: int, username: str, db: Session) -> MessageResponse:
+    msg = mark_message_deleted(message_id, username, db)
+    await broadcast_delete_event(msg)
+    return msg
+
+def decode_and_parse_token(actual_token: str | None) -> tuple[str, int]:
+    """Decode and validate payload structure of a JWT token."""
+    if not actual_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing token"
+        )
+
+    from .auth import decode_token
+    payload = decode_token(actual_token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token"
+        )
+                            
+    username = payload.get("sub")
+    version = payload.get("version")
+    
+    if username is None or version is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload"
+        )
+    return username, version
+
+def validate_user_login_version(username: str, version: int, db: Session) -> None:
+    """Validate user's login version against the database."""
+    user = repository.get_user_by_username(db, username)
+    if user is None or user.login_version != version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session invalidated (logged in elsewhere)"
+        )
+
+def validate_stream_token(actual_token: str | None, db: Session) -> tuple[str, int]:
+    """Validate token for SSE stream and return (username, login_version)."""
+    username, version = decode_and_parse_token(actual_token)
+    validate_user_login_version(username, version, db)
+    return username, version

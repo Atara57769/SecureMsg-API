@@ -1,4 +1,4 @@
-# Secure Messenger — Stage 1
+# Secure Messenger 
 
 A lightweight, secure, and real-time messaging platform built with FastAPI and Python.
 
